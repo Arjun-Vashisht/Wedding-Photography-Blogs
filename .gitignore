@@ -1,0 +1,23 @@
+# Secrets: API keys and the admin password live here. Never commit it (use .env.example as the template).
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local data: database of collected stories, posts and your ratings
+data/
+
+# Generated output (rebuilt by the agents and `python main.py build`)
+site/
+content/
+
+# Large downloads: voice models, cached music, your own music files
+voices/
+music/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
