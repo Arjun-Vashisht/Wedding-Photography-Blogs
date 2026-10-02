@@ -103,6 +103,8 @@ ICON = {
     "left": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 6-6 6 6 6"/></svg>',
     "right": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 6 6 6-6 6"/></svg>',
     "play": '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    "heart": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7.5-4.6-9.5-9.3C1.1 8.3 3.2 4.5 7 4.5c2.1 0 3.6 1.1 5 3 1.4-1.9 2.9-3 5-3 3.8 0 5.9 3.8 4.5 7.2C19.5 16.4 12 21 12 21z"/></svg>',
+    "eye": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
     "close": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>',
     "share": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>',
 }
@@ -234,7 +236,7 @@ def card(p, variant="", heading="h3"):
     return (f'<article class="card {variant} reveal"><div class="thumb">{img_tag(im)}'
             f'<span class="badge">{e(cat_name(p))}</span>{reel}</div>'
             f'<div class="body"><{heading}>{e(p["title"])}</{heading}><p>{e(p["excerpt"])}</p>'
-            f'<span class="meta">{fmt_date(p)} · {read_minutes(p)} min read</span></div>'
+            f'<span class="meta">{fmt_date(p)} · {read_minutes(p)} min read<span class="card-likes" data-likes="{e(p["slug"])}"></span></span></div>'
             f'<a class="cover" href="{post_path(p)}" aria-label="{e(p["title"])}"></a></article>')
 
 def reel_card(p):
@@ -279,6 +281,13 @@ def related(p, posts, n=3, exclude=()):
 
 # ---------- pages ----------
 
+STOP = {"wedding", "weddings", "with", "from", "into", "this", "that", "their", "season", "trend", "trends", "ideas"}
+
+def matches(topic, posts):
+    """True if any published story is about this trend (shares a meaningful word with it)."""
+    words = {w for w in re.findall(r"[a-z]{4,}", topic.lower()) if w not in STOP}
+    return any(words & set(re.findall(r"[a-z]{4,}", " ".join([p["title"], p["excerpt"], *p["tags"]]).lower())) for p in posts)
+
 def home_page(posts):
     feat = posts[:3] if len(posts) >= 6 else posts[:1]   # slideshow once there are enough stories
     if feat:
@@ -304,6 +313,13 @@ def home_page(posts):
         body += section("Latest stories", f'<div class="mag">{card(big, "big", "h3")}'
                         f'<div class="side">{"".join(card(p, "row") for p in side)}</div></div>'
                         if side else f'<div class="grid">{card(big)}</div>')
+    trending = [t for t in db.current_trends(12) if matches(t["topic"], posts)][:8]   # only trends we have stories on
+    if trending:
+        chips = "".join(f'<button class="trend-chip" data-search-q="{e(t["topic"])}">{e(t["topic"])}</button>' for t in trending)
+        body += section("Trending now", f'<div class="trend-chips">{chips}</div>', "What people are searching for this week")
+    favs = [p for p in db.reader_favourites(6) if p["likes"] or p["views"] >= 3]
+    if len(favs) >= 2:
+        body += section("Readers' favourites", rail("".join(card(p) for p in favs)), "The stories readers loved most")
     reels = [p for p in posts if p.get("reel_path")]
     if reels:
         body += section("Watch the reels", rail("".join(reel_card(p) for p in reels[:12]), "reels"),
@@ -385,8 +401,10 @@ def post_page(p, posts):
         body += '<section class="faq"><h2 id="faq">Frequently asked questions</h2>' + "".join(
             f'<details><summary>{e(f["q"])}</summary><p>{e(f["a"])}</p></details>' for f in faq) + "</section>"
 
-    share = (f'<div class="share"><button class="share-one" data-share aria-label="Share this story">'
-             f'{ICON["share"]}<span>Share</span></button></div>')
+    share = (f'<div class="share"><button class="like-btn" data-like="{e(p["slug"])}" aria-pressed="false" aria-label="Like this story" hidden>'
+             f'{ICON["heart"]}<span class="n"></span></button>'
+             f'<span class="views" data-views="{e(p["slug"])}" hidden>{ICON["eye"]}<span class="n"></span></span>'
+             f'<button class="share-one" data-share aria-label="Share this story">{ICON["share"]}<span>Share</span></button></div>')
     nxt_im = (nxt["images"] or [None])[0] if nxt else None
     next_block = (f'<a class="next-story" href="{post_path(nxt)}">{img_tag(nxt_im, "100vw") if nxt_im else "<span class=ph></span>"}'
                   f'<div class="in"><span class="kicker">Next story</span><h2>{e(nxt["title"])}</h2><p>{e(nxt["excerpt"])}</p>'
@@ -410,6 +428,8 @@ def post_page(p, posts):
   <div class="prose">{body}</div>
   <footer class="post-foot">
     <ul class="tags">{"".join(f'<li><a href="{tag_path(t)}" rel="tag">{e(t)}</a></li>' for t in p["tags"])}</ul>
+    <div class="love" data-love="{e(p["slug"])}" hidden><p>Loved this story?</p>
+      <button class="like-btn big" data-like="{e(p["slug"])}" aria-pressed="false" aria-label="Like this story">{ICON["heart"]}<span>Like</span><span class="n"></span></button></div>
     {f'<p class="src">Inspired by reporting from <a href="{e(p["source_url"])}" rel="nofollow noopener" target="_blank">{e(p["source_name"])}</a>. Written by {e(SITE_NAME)} and checked for originality and accuracy before publishing.</p>' if p["source_url"] else ""}
   </footer>
   {next_block}
@@ -425,7 +445,9 @@ def post_page(p, posts):
     keywords = [seo.get("focus_keyword", ""), *seo.get("keywords", [])] if seo else p["tags"]
     h = head(title_tag, seo.get("meta_description") or p["excerpt"], post_path(p), hero["file"] if hero else None,
              "article", "\n".join(extra), keywords, hero["file"] if hero else None)
-    return page(h, article + after + f'<div class="wrap">{more}</div>' + upnext, cat, "post")
+    float_like = (f'<button class="like-btn float-like" id="floatLike" data-like="{e(p["slug"])}" aria-pressed="false" '
+                  f'aria-label="Like this story" hidden>{ICON["heart"]}<span class="n"></span></button>')
+    return page(h, article + after + f'<div class="wrap">{more}</div>' + upnext + float_like, cat, "post")
 
 CATEGORY_BLURBS = {
     "celebrity-weddings": "The latest celebrity weddings from Bollywood, Pakistan, Korea: outfits, venues, rituals and photos.",

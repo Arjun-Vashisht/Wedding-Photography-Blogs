@@ -86,6 +86,8 @@ def cmd_schedule(_):
     from orchestrator import run_edition
     c = llm()
     s = BlockingScheduler(timezone=TIMEZONE)
+    from agents.trends import analyse
+    s.add_job(analyse, CronTrigger(hour=5, minute=0), args=[c], name="trends 05:00", misfire_grace_time=3600)
     for t in CRAWL_TIMES:
         h, m = t.strip().split(":")
         s.add_job(crawl, CronTrigger(hour=h, minute=m), args=[c], name=f"crawl {t}", misfire_grace_time=3600)
@@ -153,16 +155,17 @@ def cmd_status(_):
 
 def cmd_serve(a):
     import admin
+    import api
     admin.password()   # make sure an admin password exists (created and shown once)
     class Handler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
-            if not admin.handle_get(self):
+            if not (api.handle(self) or admin.handle_get(self)):
                 super().do_GET()
         def do_HEAD(self):
-            if not admin.handle_get(self):
+            if not (api.handle(self) or admin.handle_get(self)):
                 super().do_HEAD()
         def do_POST(self):
-            if not admin.handle_post(self):
+            if not (api.handle(self) or admin.handle_post(self)):
                 self.send_error(405)
         def send_error(self, code, message=None, explain=None):
             page = SITE_DIR / "404.html"

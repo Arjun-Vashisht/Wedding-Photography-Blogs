@@ -103,8 +103,10 @@
       activeUrl = art.dataset.url;
       history.replaceState(null, "", activeUrl);
       document.title = art.dataset.doctitle || art.dataset.title || document.title;
+      const fl = $("#floatLike");   // the floating heart always likes the story being read
+      if (fl) { fl.dataset.like = activeUrl.split("/").filter(Boolean).pop(); paintStats(); }
     }
-    if (!upnext || upDismissed || !art.dataset.next) return upnext?.classList.remove("show");
+    if (!upnext || upDismissed || !art.dataset.next) { document.body.classList.remove("upnext-on"); return upnext?.classList.remove("show"); }
     const show = p > .45 && p < .97;
     if (show && upnext.dataset.for !== art.dataset.url) {
       upnext.dataset.for = art.dataset.url;
@@ -115,6 +117,7 @@
       prefetch(art.dataset.next);
     }
     upnext.classList.toggle("show", show);
+    document.body.classList.toggle("upnext-on", show);
   }
   $("#upnext .x")?.addEventListener("click", () => { upDismissed = true; upnext.classList.remove("show"); });
 
@@ -168,14 +171,59 @@
     endObs.observe(sentinel);
   }
 
+  /* ---------- views and likes (needs the site's server; hidden on a plain static host) ---------- */
+  let stats = null;
+  const fmt = n => n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + "k" : String(n || "");
+  function paintStats(root = document) {
+    if (!stats) return;
+    $$("[data-like]", root).forEach(b => { const s = stats[b.dataset.like] || { likes: 0, liked: false };
+      b.hidden = false; b.setAttribute("aria-pressed", s.liked); $(".n", b).textContent = fmt(s.likes); });
+    $$("[data-love]", root).forEach(el => el.hidden = false);
+    $$("[data-views]", root).forEach(el => { const s = stats[el.dataset.views];
+      if (s && s.views) { el.hidden = false; $(".n", el).textContent = `${fmt(s.views)} ${s.views === 1 ? "view" : "views"}`; } });
+    $$("[data-likes]", root).forEach(el => { const s = stats[el.dataset.likes]; el.textContent = s && s.likes ? fmt(s.likes) : ""; });
+  }
+  const loadStats = () => fetch("/api/stats", { credentials: "same-origin" }).then(r => r.ok ? r.json() : null)
+    .then(j => { stats = j; paintStats(); }).catch(() => {});
+  loadStats();
+  const post = (path, body) => fetch(path, { method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(r => r.ok ? r.json() : null).catch(() => null);
+  document.addEventListener("click", async e => {
+    const b = e.target.closest("[data-like]"); if (!b || !stats) return;
+    const slug = b.dataset.like, s = stats[slug] ||= { views: 0, likes: 0, liked: false };
+    s.liked = !s.liked; s.likes = Math.max(0, s.likes + (s.liked ? 1 : -1));   // update at once, confirm after
+    paintStats(); $$(`[data-like="${slug}"]`).forEach(x => { x.classList.add("pop"); setTimeout(() => x.classList.remove("pop"), 250); });
+    const r = await post("/api/like", { slug, like: s.liked });
+    if (r) { stats[slug] = r; paintStats(); }
+  });
+  // A view counts once the reader has really read: 35% of the story, or 10 seconds on it.
+  const viewed = new Set();
+  const countView = art => {
+    const slug = (art.dataset.url || "").split("/").filter(Boolean).pop();
+    if (!slug || viewed.has(slug)) return;
+    viewed.add(slug);
+    post("/api/view", { slug }).then(r => { if (r && stats) { stats[slug] = r; paintStats(art); } });
+  };
+  const watchRead = art => {
+    const t = setTimeout(() => countView(art), 10000);
+    const check = () => { const r = art.getBoundingClientRect();
+      if (-r.top / Math.max(1, r.height - innerHeight) > .35) { clearTimeout(t); countView(art); removeEventListener("scroll", check); } };
+    addEventListener("scroll", check, { passive: true });
+  };
+  articles().forEach(watchRead);
+  new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => {
+    if (n.matches?.("article.story")) { watchRead(n); paintStats(n); }
+  }))).observe(document.body, { childList: true, subtree: true });
+
   /* ---------- search ---------- */
   const searchEl = $("#search");
   const input = $("#q"), results = $("#results");
-  async function openSearch() {
+  async function openSearch(q = "") {
     if (!searchEl) return;
     closeOverlays(); searchEl.classList.add("open"); document.body.style.overflow = "hidden";
-    input.value = ""; await loadPosts(); renderResults(""); setTimeout(() => input.focus(), 30);
+    input.value = q; await loadPosts(); renderResults(q); setTimeout(() => input.focus(), 30);
   }
+  document.addEventListener("click", e => { const c = e.target.closest("[data-search-q]"); if (c) openSearch(c.dataset.searchQ); });
   const hi = (text, q) => !q ? esc(text) : esc(text).replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"), "<mark>$1</mark>");
   let sel = 0;
   function renderResults(q) {
@@ -200,7 +248,7 @@
       items.forEach((it, i) => it.classList.toggle("sel", i === sel)); items[sel]?.scrollIntoView({ block: "nearest" });
     } else if (e.key === "Enter" && items[sel]) location.href = items[sel].getAttribute("href");
   });
-  $$("[data-search]").forEach(b => b.addEventListener("click", openSearch));
+  $$("[data-search]").forEach(b => b.addEventListener("click", () => openSearch()));
 
   /* ---------- reel player: full screen, swipe up for the next reel ---------- */
   const player = $("#player"), feed = $("#playerFeed");

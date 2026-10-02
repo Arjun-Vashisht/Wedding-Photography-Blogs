@@ -22,6 +22,16 @@ CREATE TABLE IF NOT EXISTS posts(
   created_at TEXT,
   category TEXT, seo TEXT, seo_score INTEGER
 );
+CREATE TABLE IF NOT EXISTS trends(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run TEXT, topic TEXT, score INTEGER, why TEXT, queries TEXT, sources TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS views(                    -- one row per reader per post per day
+  post_id INTEGER, visitor TEXT, day TEXT, PRIMARY KEY(post_id, visitor, day)
+);
+CREATE TABLE IF NOT EXISTS likes(                    -- one like per reader per post
+  post_id INTEGER, visitor TEXT, created_at TEXT, PRIMARY KEY(post_id, visitor)
+);
 CREATE TABLE IF NOT EXISTS feedback(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   post_id INTEGER, rating INTEGER, note TEXT, created_at TEXT,
@@ -175,3 +185,67 @@ def editor_notes(n=8):
 
 def get_post(pid):
     return next((p for p in posts() if p["id"] == pid), None)
+
+# ---------- trends ----------
+
+def save_trends(items, run):
+    with conn() as c:
+        c.executemany("INSERT INTO trends(run,topic,score,why,queries,sources,created_at) VALUES(?,?,?,?,?,?,?)",
+                      [(run, t["topic"], int(t.get("score") or 0), t.get("why", ""), json.dumps(t.get("queries") or []),
+                        json.dumps(t.get("sources") or []), now()) for t in items])
+
+def current_trends(limit=15):
+    """Trends from the most recent analysis, strongest first."""
+    with conn() as c:
+        run = c.execute("SELECT run FROM trends ORDER BY id DESC LIMIT 1").fetchone()
+        if not run:
+            return []
+        rows = [dict(r) for r in c.execute("SELECT * FROM trends WHERE run=? ORDER BY score DESC LIMIT ?", (run[0], limit))]
+    for r in rows:
+        r["queries"], r["sources"] = json.loads(r["queries"] or "[]"), json.loads(r["sources"] or "[]")
+    return rows
+
+# ---------- reader engagement ----------
+
+def add_view(post_id, visitor):
+    with conn() as c:
+        c.execute("INSERT OR IGNORE INTO views(post_id,visitor,day) VALUES(?,?,?)", (post_id, visitor, now()[:10]))
+
+def set_like(post_id, visitor, liked):
+    with conn() as c:
+        if liked:
+            c.execute("INSERT OR IGNORE INTO likes(post_id,visitor,created_at) VALUES(?,?,?)", (post_id, visitor, now()))
+        else:
+            c.execute("DELETE FROM likes WHERE post_id=? AND visitor=?", (post_id, visitor))
+
+def engagement(visitor=None):
+    """{post_id: {"views", "likes", "liked"}} for every post with any activity."""
+    with conn() as c:
+        out = {r[0]: {"views": r[1], "likes": 0, "liked": False}
+               for r in c.execute("SELECT post_id, COUNT(*) FROM views GROUP BY post_id")}
+        for pid, n in c.execute("SELECT post_id, COUNT(*) FROM likes GROUP BY post_id"):
+            out.setdefault(pid, {"views": 0, "likes": 0, "liked": False})["likes"] = n
+        if visitor:
+            for (pid,) in c.execute("SELECT post_id FROM likes WHERE visitor=?", (visitor,)):
+                out.setdefault(pid, {"views": 0, "likes": 0, "liked": False})["liked"] = True
+    return out
+
+def reader_favourites(n=6):
+    """Published posts readers engaged with most (a like counts as much as 10 views), for the agents and the homepage."""
+    stats = engagement()
+    ranked = []
+    for p in posts("published"):
+        s = stats.get(p["id"])
+        if s and (s["views"] or s["likes"]):
+            ranked.append({**p, "views": s["views"], "likes": s["likes"], "score": s["views"] + 10 * s["likes"]})
+    return sorted(ranked, key=lambda p: -p["score"])[:n]
+
+def reader_category_stats():
+    """Average views and likes per published post, by category: what readers respond to."""
+    stats, agg = engagement(), {}
+    for p in posts("published"):
+        s = stats.get(p["id"], {"views": 0, "likes": 0})
+        a = agg.setdefault(p.get("category"), {"posts": 0, "views": 0, "likes": 0})
+        a["posts"] += 1; a["views"] += s["views"]; a["likes"] += s["likes"]
+    return {k: {**v, "views_per_post": round(v["views"] / v["posts"], 1), "likes_per_post": round(v["likes"] / v["posts"], 1)}
+            for k, v in agg.items()}

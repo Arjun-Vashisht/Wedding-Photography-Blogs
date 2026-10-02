@@ -3,7 +3,7 @@ balances topics, and learns from editor ratings."""
 import logging
 from agents.base import shape
 import db
-from agents import images
+from agents import images, trends
 from config import INDIA_SHARE, QUOTA_WINDOW, CATEGORIES
 
 log = logging.getLogger("selector")
@@ -28,6 +28,7 @@ What makes a winner:
 - Balance: real weddings (actual couples and their celebrations) and what is happening in wedding photography
   (photographers' work, awards, exhibitions, techniques and trends) matter as much as celebrity weddings.
   Pre-wedding photoshoots are fine now and then but must not dominate.
+- Trends: stories matching what is trending now, and topics our readers view and like most, get more readers.
 - The editor approves or rejects every post. Their ratings, reasons and notes below are the strongest signal:
   pick stories like the ones they approved and rated highly, and avoid what they rejected and why.
 Morning edition: practical, bright and useful (fashion, photography ideas, traditions explained, planning).
@@ -45,9 +46,11 @@ def select(llm, edition, exclude=()):
     if not pool:
         return None
 
-    pool = pool[:10]
+    pool = pool[:12]
     for c in pool:
         c["photos"] = images.availability(c)
+    with_photos = [c for c in pool if c["photos"]]
+    pool = with_photos or pool   # stories without free photos only if nothing else is left
     best, worst = db.feedback_examples()
     listing = "\n".join(
         f'- id={c["id"]} | {c["title"]} | {CATEGORIES.get(c.get("category"), "?")} | '
@@ -58,6 +61,11 @@ def select(llm, edition, exclude=()):
 Recent posts (don't repeat these topics):
 {chr(10).join("- " + t for t in db.recent_titles()) or "- none yet"}
 Recent categories: {", ".join(filter(None, db.recent_categories())) or "none yet"}
+
+{trends.prompt_block() or "Trending now: no trend data yet"}
+What our readers respond to (views and likes per post, by category):
+{", ".join(f'{CATEGORIES.get(k, k)} {v["views_per_post"]} views / {v["likes_per_post"]} likes' for k, v in db.reader_category_stats().items()) or "no reader data yet"}
+Readers' favourite posts: {"; ".join(f'{p["title"]} ({p["views"]} views, {p["likes"]} likes)' for p in db.reader_favourites(4)) or "none yet"}
 
 Editor approved and liked:
 {chr(10).join(f'- {b["title"]} [{CATEGORIES.get(b["category"], "?")}] ({b["rating"]}/5){": " + b["note"] if b["note"] else ""}' for b in best) or "- no ratings yet"}

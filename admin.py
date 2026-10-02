@@ -63,28 +63,38 @@ def same_origin(handler):
 
 # ---------- background job: prepare drafts ----------
 
-JOB = {"running": False, "lines": [], "made": 0, "error": ""}
+JOB = {"running": False, "task": "", "lines": [], "result": "", "error": ""}
+TASKS = {"drafts": "Preparing drafts", "trends": "Finding trends", "build": "Rebuilding the website"}
 
 class _JobLog(logging.Handler):
     def emit(self, record):
         if JOB["running"]:
             JOB["lines"] = (JOB["lines"] + [f"{time.strftime('%H:%M:%S')}  {record.getMessage()}"])[-60:]
 
-def start_drafts(count):
-    if JOB["running"]:
+def start_job(task, count=None):
+    """Run one of TASKS in the background; progress lines appear on the dashboard."""
+    if JOB["running"] or task not in TASKS:
         return False
-    JOB.update(running=True, lines=[], made=0, error="")
+    JOB.update(running=True, task=task, lines=[], result="", error="")
     handler = _JobLog(logging.INFO)
     logging.getLogger().addHandler(handler)
 
     def run():
         try:
             from agents.base import LLM
-            from orchestrator import make_drafts
-            JOB["made"] = len(make_drafts(LLM(), count=count, crawl=True))
+            if task == "drafts":
+                from orchestrator import make_drafts
+                JOB["result"] = f"{len(make_drafts(LLM(), count=count, crawl=True))} new draft(s)."
+            elif task == "trends":
+                from agents.trends import analyse
+                JOB["result"] = f"{len(analyse(LLM()))} trends found."
+            else:
+                from agents.publisher import export_site
+                export_site()
+                JOB["result"] = "Website rebuilt."
         except Exception as ex:   # shown on the dashboard
             JOB["error"] = str(ex)[:300]
-            log.exception("draft job failed")
+            log.exception("%s job failed", task)
         finally:
             JOB["running"] = False
             logging.getLogger().removeHandler(handler)
@@ -113,7 +123,13 @@ def state():
             """SELECT p.id, p.title, p.slug, p.status, f.decision, f.rating, f.reason, f.note, f.created_at
                FROM feedback f JOIN posts p ON p.id=f.post_id ORDER BY f.id DESC LIMIT 25""")]
         counts = dict(c.execute("SELECT status, COUNT(*) FROM articles WHERE length(text)>0 GROUP BY status").fetchall())
+    stats = db.engagement()
+    top = sorted(({"title": p["title"], "slug": p["slug"], "category": CATEGORIES.get(p.get("category"), "Weddings"),
+                   **stats.get(p["id"], {"views": 0, "likes": 0})} for p in db.posts("published")),
+                 key=lambda x: -(x["views"] + 10 * x["likes"]))[:10]
     return {"pending": [draft_json(p) for p in pending], "recent": recent, "learning": review.learning_summary(),
+            "trends": db.current_trends(15), "top": top,
+            "trends_at": (db.current_trends(1) or [{}])[0].get("created_at", ""),
             "job": JOB, "reasons": review.REJECT_REASONS, "stories_waiting": counts.get("new", 0),
             "published": len(db.posts("published")), "drafts_per_day": DRAFTS_PER_DAY}
 
@@ -202,9 +218,9 @@ def handle_post(h):
             else:
                 raise ValueError("unknown action")
             _json(h, {"ok": True})
-        elif path == "/admin/api/generate":
-            ok = start_drafts(max(1, min(5, int(data.get("count") or DRAFTS_PER_DAY))))
-            _json(h, {"ok": ok, "error": "" if ok else "the agents are already preparing drafts"})
+        elif path == "/admin/api/run":
+            ok = start_job(data.get("task", ""), max(1, min(5, int(data.get("count") or DRAFTS_PER_DAY))))
+            _json(h, {"ok": ok, "error": "" if ok else f"busy: {TASKS.get(JOB['task'], 'a job')} is still running"})
         else:
             _json(h, {"error": "not found"}, 404)
     except Exception as ex:
@@ -263,6 +279,14 @@ table{width:100%;border-collapse:collapse;font-size:.9rem;background:var(--surfa
 th,td{text-align:left;padding:.65rem .8rem;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .tag-ok{color:#2E7D4F;font-weight:600}.tag-no{color:var(--accent);font-weight:600}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:2.5rem}
+@media (max-width:860px){.two{grid-template-columns:1fr}}
+.muted{color:var(--muted);font-size:.88rem;margin:-.5rem 0 1rem}
+.trend{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:.8rem 1rem;margin-bottom:.6rem}
+.trend b{font-family:var(--display);font-size:1.05rem}
+.trend .sc{float:right;font-weight:700;color:var(--accent)}
+.trend p{margin:.25rem 0 0;font-size:.88rem;color:var(--ink-2)}
+.trend small{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}
 .toast{position:fixed;left:50%;bottom:24px;translate:-50% 0;background:var(--ink);color:var(--bg);padding:.75rem 1.2rem;border-radius:999px;font-size:.92rem;opacity:0;transition:opacity .25s;z-index:90;pointer-events:none}
 .toast.on{opacity:1}
 .pv{position:fixed;inset:0;z-index:80;background:rgba(10,6,8,.7);display:none;padding:2.5vh 2.5vw}
@@ -293,15 +317,24 @@ DASHBOARD = _HEAD + """<div class="adm">
 </div>
 <div class="learn" id="learn"></div>
 
+<h2 class="h">Run now</h2>
 <div class="gen">
-  <button class="btn" id="genBtn">Prepare new drafts</button>
+  <button class="btn" data-run="drafts">Prepare new drafts</button>
   <select id="genCount" aria-label="How many drafts"><option>1</option><option>2</option><option selected>3</option></select>
-  <span id="genNote" style="color:var(--muted);font-size:.9rem">The agents collect fresh stories, then write, check and illustrate each draft. This takes a few minutes.</span>
+  <button class="btn ghost" data-run="trends">Find trends now</button>
+  <button class="btn ghost" data-run="build">Rebuild website</button>
+  <span style="color:var(--muted);font-size:.88rem;flex-basis:100%">These also run on their own every day. Drafts take a few minutes each.</span>
   <pre class="joblog" id="jobLog"></pre>
 </div>
 
 <h2 class="h">Waiting for review <span class="count" id="pCount">0</span></h2>
 <div id="drafts"></div>
+
+<div class="two">
+  <section><h2 class="h">Trending now</h2><p class="muted" id="trendsAt"></p><div id="trends"></div></section>
+  <section><h2 class="h">What readers love</h2><p class="muted">Views and likes on the site. The agents use these too.</p>
+    <table><thead><tr><th>Story</th><th>Views</th><th>Likes</th></tr></thead><tbody id="top"></tbody></table></section>
+</div>
 
 <h2 class="h" style="margin-top:2.5rem">Your recent decisions</h2>
 <div style="overflow-x:auto"><table><thead><tr><th>Story</th><th>Decision</th><th>Rating</th><th>Reason / note</th><th>When</th></tr></thead>
@@ -358,13 +391,20 @@ function render() {
     <td class="${r.decision === "rejected" ? "tag-no" : "tag-ok"}">${esc(r.decision || "rated")}</td><td>${"★".repeat(r.rating || 0)}</td>
     <td>${esc([r.reason, r.note].filter(Boolean).join(" — "))}</td><td>${esc((r.created_at || "").replace("T", " ").slice(0, 16))}</td></tr>`).join("")
     || `<tr><td colspan="5" style="color:var(--muted)">No decisions yet.</td></tr>`;
+  $("#trendsAt").textContent = S.trends.length ? `Last checked ${esc((S.trends_at || "").replace("T", " ").slice(0, 16))}. Sources: Google Trends (13 countries), Wikipedia, your readers.` : "";
+  $("#trends").innerHTML = S.trends.map(t => `<div class="trend"><span class="sc">${t.score}/10</span><small>${esc((t.sources || []).join(", "))}</small><br>
+    <b>${esc(t.topic)}</b><p>${esc(t.why)}</p></div>`).join("") || `<p class="muted">No trend data yet. Press “Find trends now”.</p>`;
+  $("#top").innerHTML = S.top.map(t => `<tr><td><a href="/blog/${esc(t.slug)}/" target="_blank">${esc(t.title)}</a><br><small style="color:var(--muted)">${esc(t.category)}</small></td>
+    <td>${t.views}</td><td>${t.likes}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No readers yet.</td></tr>`;
   renderJob();
 }
 function renderJob() {
-  const j = S.job, log = $("#jobLog"), btn = $("#genBtn");
-  btn.disabled = j.running; btn.textContent = j.running ? "Preparing drafts…" : "Prepare new drafts";
+  const j = S.job, log = $("#jobLog");
+  document.querySelectorAll("[data-run]").forEach(b => { b.disabled = j.running;
+    if (!b.dataset.label) b.dataset.label = b.textContent;
+    b.textContent = j.running && j.task === b.dataset.run ? "Working…" : b.dataset.label; });
   log.classList.toggle("on", j.running || !!j.error || j.lines.length > 0);
-  log.textContent = j.lines.join("\\n") + (j.error ? `\\n\\nProblem: ${j.error}` : "") + (!j.running && j.lines.length ? `\\n\\nDone: ${j.made} new draft(s).` : "");
+  log.textContent = j.lines.join("\\n") + (j.error ? `\\n\\nProblem: ${j.error}` : "") + (!j.running && j.result ? `\\n\\nDone: ${j.result}` : "");
   log.scrollTop = log.scrollHeight;
   if (j.running && !polling) polling = setInterval(load, 3000);
   if (!j.running && polling) { clearInterval(polling); polling = null; }
@@ -389,9 +429,10 @@ document.addEventListener("click", async ev => {
     } catch (err) { toast(err.message || "Something went wrong"); t.disabled = false; t.textContent = approve ? "Approve & publish" : "Confirm reject"; }
   }
 });
-$("#genBtn").addEventListener("click", async () => {
-  try { const r = await api("/admin/api/generate", {count: +$("#genCount").value}); if (!r.ok) toast(r.error); await load(); } catch (err) { toast(err.message); }
-});
+document.querySelectorAll("[data-run]").forEach(b => b.addEventListener("click", async () => {
+  try { const r = await api("/admin/api/run", {task: b.dataset.run, count: +$("#genCount").value}); if (!r.ok) toast(r.error); await load(); }
+  catch (err) { toast(err.message); }
+}));
 const closePv = () => { $("#pv").classList.remove("on"); $("#pvFrame").src = "about:blank"; };
 $("#pvClose").addEventListener("click", closePv);
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") closePv(); });

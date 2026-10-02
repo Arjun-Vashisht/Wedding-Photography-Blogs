@@ -20,7 +20,9 @@ shutil.copytree(Path(__file__).resolve().parents[1] / "theme", tmp / "theme")
 import db; db.DB_PATH = config.DB_PATH
 from agents import plagiarism, reels, seo, images
 images.availability = lambda article: 5          # no network
-images.find_images = lambda *a, **k: []
+FAKE_PHOTO = {"file": "images/test.jpg", "alt": "Test photo", "title": "Test photo", "width": 1600, "height": 1067,
+              "credit": "Tester", "license": "CC0", "source_url": "https://example.com", "site": "Example"}
+images.find_images = lambda *a, **k: [dict(FAKE_PHOTO)]
 from agents import music
 music.pick = lambda *a, **k: None               # no network; music mixing is checked separately
 import orchestrator
@@ -134,9 +136,30 @@ def test_admin_review():
     assert any(x["reason"] == "Too similar to a recent post" for x in worst)
     print("admin approve/reject and agent learning: ok")
 
+def test_engagement_and_trends():
+    from agents import trends
+    pub = db.posts("published")[0]
+    for v in ("reader-a", "reader-b", "reader-a"):        # the repeat view from reader-a doesn't count twice
+        db.add_view(pub["id"], v)
+    db.set_like(pub["id"], "reader-a", True); db.set_like(pub["id"], "reader-a", True)
+    s = db.engagement("reader-a")[pub["id"]]
+    assert s == {"views": 2, "likes": 1, "liked": True}, s
+    db.set_like(pub["id"], "reader-a", False)
+    assert db.engagement("reader-a")[pub["id"]]["likes"] == 0
+    db.set_like(pub["id"], "reader-b", True)
+    assert db.reader_favourites(3)[0]["id"] == pub["id"]
+    gt = [{"term": "jim carrey", "traffic": 500, "country": "Singapore", "news": ["Jim Carrey marries Min Ah"]}]
+    kept = trends.verify([
+        {"topic": "Jim Carrey's wedding", "source": "google trends", "evidence": "jim carrey", "score": 9},
+        {"topic": "Pumpkin spice bridal accessories", "source": "google trends", "evidence": "pumpkin spice", "score": 7},
+        {"topic": "Diwali weddings", "source": "seasonal", "evidence": "", "score": 9}], gt, [], [])
+    assert [t["topic"] for t in kept] == ["Jim Carrey's wedding", "Diwali weddings"], kept
+    assert kept[1]["score"] <= 6   # seasonal ideas are capped
+    print("views, likes, reader favourites and trend evidence check: ok")
+
 if __name__ == "__main__":
     try:
-        test_overlap(); test_seo_audit(); test_pipeline(); test_admin_review()
+        test_overlap(); test_seo_audit(); test_pipeline(); test_admin_review(); test_engagement_and_trends()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("all tests passed")

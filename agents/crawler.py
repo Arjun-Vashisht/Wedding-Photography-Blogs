@@ -82,7 +82,8 @@ def real_link(link):
 def discover(per_feed=25):
     """Yield candidate entries from every feed and news search (not yet fetched)."""
     sources = [(f["url"], f.get("wedding", False)) for f in FEEDS]
-    sources += [(bing_news(q), False) for q in NEWS_SEARCHES]
+    from agents.trends import search_queries
+    sources += [(bing_news(q), False) for q in dict.fromkeys([*search_queries(), *NEWS_SEARCHES])]
     seen = set()
     for url, wedding_feed in sources:
         try:

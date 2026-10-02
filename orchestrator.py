@@ -85,6 +85,10 @@ def run_edition(llm, edition, date=None, max_sources=3, draft_only=False):
 
         slug = publisher.unique_slug(post.get("slug") or post["focus_keyword"] or post["title"])
         imgs = images.find_images(llm, post, slug, article=article)
+        if not imgs:   # the editor rejects posts without photos, so try another story instead
+            db.set_article_status(article["id"], "rejected")
+            log.warning("no suitable free photos for this story, trying another")
+            continue
         reel_path, caption, music_credit = reels.make_reel(llm, post, imgs, slug,
                                                            region=article["region"], edition=edition)
 

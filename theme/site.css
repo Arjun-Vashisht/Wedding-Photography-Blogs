@@ -304,3 +304,38 @@ img[data-zoom]{cursor:zoom-in}
 @media (hover:none){.viewer-nav{display:none}}
 .share .share-one{width:auto;height:42px;padding:0 1.1rem;border-radius:999px;display:inline-flex;gap:.5rem;align-items:center;font-weight:600;font-size:.92rem}
 .share .share-one.done span::after{content:" · link copied"}
+
+/* ---------- likes, views, trends ---------- */
+.share{align-items:center}
+.like-btn{display:inline-flex;align-items:center;gap:.45rem;height:42px;padding:0 1rem;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-weight:600;font-size:.92rem;transition:transform .15s,border-color .15s,color .15s}
+.like-btn svg{width:18px;height:18px;transition:transform .25s}
+.like-btn:hover{border-color:var(--accent);color:var(--accent)}
+.like-btn[aria-pressed="true"]{color:var(--accent);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--surface))}
+.like-btn[aria-pressed="true"] svg{fill:currentColor}
+.like-btn.pop svg{transform:scale(1.35)}
+.like-btn .n:empty{display:none}
+.views{display:inline-flex;align-items:center;gap:.35rem;color:var(--muted);font-size:.88rem;padding:0 .4rem}
+.views svg{width:17px;height:17px}
+.love{text-align:center;margin:0 0 1.75rem}
+.love p{font:600 1.35rem var(--display);margin:0 0 .75rem}
+.like-btn.big{height:52px;padding:0 1.6rem;font-size:1rem}
+.like-btn.big svg{width:22px;height:22px}
+.card-likes:not(:empty)::before{content:" · ♥ "}
+.card-likes{color:var(--accent)}
+.trend-chips{display:flex;flex-wrap:wrap;gap:.6rem}
+.trend-chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:.6rem 1.1rem;font-weight:500;box-shadow:var(--shadow);transition:transform .15s,border-color .15s}
+.trend-chip::before{content:"↗ ";color:var(--accent);font-weight:700}
+.trend-chip:hover{transform:translateY(-2px);border-color:var(--accent)}
+/* floating like: always within reach while reading */
+.float-like{position:fixed;left:20px;bottom:20px;z-index:44;height:52px;padding:0 1.15rem;font-size:1rem;
+  box-shadow:var(--shadow-lg);transition:bottom .45s cubic-bezier(.2,.8,.2,1),transform .15s,border-color .15s,color .15s}
+.float-like svg{width:22px;height:22px}
+@media (max-width:640px){.float-like{left:auto;right:16px;bottom:16px;height:50px}
+  body.upnext-on .float-like{bottom:118px}}
+/* post header actions: three pills of equal height on one line */
+.share{gap:.6rem;flex-wrap:wrap}
+.share .like-btn,.share .share-one{width:auto;height:44px;padding:0 1.15rem;border-radius:999px;display:inline-flex;align-items:center;gap:.5rem;font-weight:600;font-size:.94rem;line-height:1}
+.share .like-btn .n{font-variant-numeric:tabular-nums;min-width:.6em}
+.share .views{height:44px;padding:0 1.05rem;border-radius:999px;background:var(--sunk);color:var(--ink-2);font-size:.92rem;gap:.45rem}
+.share .views[hidden]{display:none}
+.share .views svg{width:18px;height:18px;opacity:.75}
